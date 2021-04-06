@@ -1,0 +1,6 @@
+- hosts: elasticsearchdev
+  become: true
+  become_user: elasticsearch  
+  roles:
+    - elasticsearch
+

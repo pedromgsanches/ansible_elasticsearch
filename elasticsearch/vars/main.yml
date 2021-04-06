@@ -1,0 +1,21 @@
+es_cluster_name: "ElasticSearchCorp"
+es_seed_hosts: '"192.168.0.31","192.168.0.32","192.168.0.33"'
+es_master_nodes: '"elk1","elk2","elk3"'
+
+elasticsearch_version: "7.12.0"
+elasticsearch_targz: "elasticsearch-7.12.0-linux-x86_64.tar.gz"
+
+elasticsearch_base: "/opt/elastic"
+elasticsearch_bin: "{{ elasticsearch_base }}/elasticsearch-{{ elasticsearch_version }}/bin"
+
+#es_http_host: "{{ ansible_hostname }}"
+es_http_host: "{{ ansible_eth1.ipv4.address }}"
+es_http_port: "9200"
+
+#es_trans_host: "{{ ansible_hostname }}"
+es_trans_host: "{{ ansible_eth1.ipv4.address }}"
+es_trans_port: "9300"
+
+ca_pass: "cryptM3"
+cert_pass: "crypt00"
+

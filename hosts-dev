@@ -1,0 +1,10 @@
+# hosts-servers
+
+[elasticsearchdev]
+elk1
+elk2
+elk3
+
+[local]
+control ansible_connection=local
+

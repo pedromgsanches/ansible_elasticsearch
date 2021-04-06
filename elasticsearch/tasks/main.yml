@@ -1,0 +1,217 @@
+---
+# Create Server Environment
+
+- name: "Copy ElasticSearch tar.gz file to servers"
+  copy: src="{{ elasticsearch_targz }}" dest="{{ elasticsearch_base }}"
+
+- name: "UnTar ElasticSearch binaries"
+  unarchive:
+    src: "{{ elasticsearch_base }}/{{ elasticsearch_targz }}"
+    dest: "{{ elasticsearch_base }}/"
+    remote_src: yes
+  tags: untarbinaries
+
+# Caso o serviço seja ao nivel do user em vez de root,
+# Deixamos de precisar do SymLink, assim no caso de haver várias instâncias 
+# é possível migrar à vez
+#- name: "Create current Version SymLink"
+#  file:
+#    src: "/opt/elasticsearch/elasticsearch-7.12.0"
+#    dest: "/opt/elasticsearch/bin"
+#    state: link
+
+# Configure Cluster Instance
+# Os valores Xms e Xms podem ser parte da lista de variáveis
+
+- name: "Create Instance Directories"
+  file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: elasticsearch
+    group: elasticsearch
+    mode: 0770
+    recurse: yes
+  with_items:
+    - { path: "{{ elasticsearch_base }}/data/{{ es_cluster_name }}" }
+    - { path: "{{ elasticsearch_base }}/logs/{{ es_cluster_name }}" }
+    - { path: "{{ elasticsearch_base }}/config/{{ es_cluster_name }}" }
+
+- name: "Copy log4j2.properties"
+  copy:
+    src: "{{ elasticsearch_base }}/elasticsearch-{{ elasticsearch_version }}/config/log4j2.properties"
+    dest: "{{ elasticsearch_base }}/config/{{ es_cluster_name }}"
+    remote_src: yes
+
+- name: "Copy jvm.options"
+  copy:
+    src: "{{ elasticsearch_base }}/elasticsearch-{{ elasticsearch_version }}/config/jvm.options"
+    dest: "{{ elasticsearch_base }}/config/{{ es_cluster_name }}"
+    remote_src: yes
+
+- name: "Configure JVM Options Xms"
+  tags: set_jXms
+  lineinfile: path='{{ elasticsearch_base }}/config/{{ es_cluster_name }}/jvm.options' regexp='^-Xms.*' line='-Xms256m'
+
+- name: "Configure JVM Options Xmx"
+  tags: set_jXmx
+  lineinfile: path='{{ elasticsearch_base }}/config/{{ es_cluster_name }}/jvm.options' regexp='^-Xmx.*' line='-Xmx256m'
+
+# elasticsearch.yml
+# TEMPLATE
+- name: "Copy ES template"
+  template:
+    src: "elasticsearch.tpl"
+    dest: "{{ elasticsearch_base }}/config/{{ es_cluster_name  }}/elasticsearch.yml"
+
+
+########################################################################################################
+# SSL TRANSPORT Configure
+
+- name: "Generate CA Cert"
+  run_once: true
+  block:
+  - name: "Create SSL dir"
+    file:
+      path: "{{ elasticsearch_base }}/config/{{ es_cluster_name }}"
+      state: directory
+      owner: elasticsearch
+      group: elasticsearch
+      mode: 0770
+      recurse: yes
+
+  - name: "Check if CA File exists"
+    stat:
+      path: "{{ elasticsearch_base }}/config/{{ es_cluster_name }}/ca"
+    register: ca_file_exists
+
+  - name: "Create Certificates"
+    shell: "{{ elasticsearch_bin }}/elasticsearch-certutil ca --out {{ elasticsearch_base }}/config/{{ es_cluster_name }}/ca --pass {{ ca_pass }}"
+    when: not ca_file_exists.stat.exists
+
+  - name: "Fetch CA File"
+    fetch:
+      src: "{{ elasticsearch_base }}/config/{{ es_cluster_name }}/ca"
+      dest: "/tmp/{{ es_cluster_name }}/files/"
+      flat: yes
+
+# Gen SSL Keys, distribute into servers
+- name: "Distribute SSL"
+  block:
+    - name: "Create SSL dir"
+      file:
+        path: "{{ elasticsearch_base }}/config/{{ es_cluster_name }}"
+        state: directory
+        owner: elasticsearch
+        group: elasticsearch
+        recurse: yes
+
+    - name: "Check if CA File exists"
+      stat:
+        path: "{{ elasticsearch_base }}/config/{{ es_cluster_name }}/ca"
+      register: ca_file_dest_exist
+
+    - name: "Copy CA File"
+      copy:
+        src: "/tmp/{{ es_cluster_name }}/files/ca"
+        dest: "{{ elasticsearch_base }}/config/{{ es_cluster_name }}/"
+        owner: elasticsearch
+        group: elasticsearch
+        mode: '0644'
+        backup: yes
+      when: not ca_file_dest_exist.stat.exists
+
+
+# Gen SSL Server Keys, config security
+- name: "gen server certs"
+  block:
+    - name: "Check if /opt/elasticsearch/bin/config/<server> exists"
+      stat:
+        path: "{{ elasticsearch_base }}/config/{{ es_cluster_name }}/{{ ansible_hostname }}"
+      register: cert_file_exists
+    - name: "Gen Certs"
+      shell: "{{ elasticsearch_bin }}/elasticsearch-certutil cert --ca {{ elasticsearch_base }}/config/{{ es_cluster_name }}/ca --ca-pass {{ ca_pass }} --name '{{ ansible_hostname }}' --dns '{{ ansible_hostname }}' --ip '{{ ansible_eth1.ipv4.address }}' --out {{ elasticsearch_base }}/config/{{ es_cluster_name }}/{{ ansible_hostname }} --pass {{ cert_pass }}"
+      when: not cert_file_exists.stat.exists
+
+- name: "elasticsearch.yml Transport secure"
+  lineinfile:
+    path: "{{ elasticsearch_base }}/config/{{ es_cluster_name }}/elasticsearch.yml"
+    insertafter: EOF
+    line: "{{ item.line }}"
+  with_items:
+    - { line: "xpack.security.enabled: true" }
+    - { line: "xpack.security.transport.ssl.enabled: true" }
+    - { line: "xpack.security.transport.ssl.verification_mode: full" }
+    - { line: "xpack.security.transport.ssl.keystore.path: {{ elasticsearch_base }}/config/{{ es_cluster_name }}/{{ ansible_hostname }}" }
+    - { line: "xpack.security.transport.ssl.truststore.path: {{ elasticsearch_base }}/config/{{ es_cluster_name }}/ca" }
+    - { line: "xpack.security.http.ssl.enabled: true" }
+    - { line: "xpack.security.http.ssl.keystore.path: {{ elasticsearch_base }}/config/{{ es_cluster_name }}/{{ ansible_hostname }}" }
+    - { line: "xpack.security.http.ssl.truststore.path: {{ elasticsearch_base }}/config/{{ es_cluster_name }}/ca" }
+
+- name: "Keystore-Truststore secure"
+  block:
+    - name: "transport Keystore secure"
+      shell: printf {{ cert_pass }} | ES_PATH_CONF={{ elasticsearch_base }}/config/{{ es_cluster_name }} {{ elasticsearch_bin }}/elasticsearch-keystore add xpack.security.transport.ssl.keystore.secure_password
+    - name: "transport Truststore secure"
+      shell: printf {{ ca_pass }} | ES_PATH_CONF={{ elasticsearch_base }}/config/{{ es_cluster_name }}/ {{ elasticsearch_bin }}/elasticsearch-keystore add xpack.security.transport.ssl.truststore.secure_password
+    - name: "http Keystore secure"
+      shell: printf {{ cert_pass }} | ES_PATH_CONF={{ elasticsearch_base }}/config/{{ es_cluster_name }} {{ elasticsearch_bin }}/elasticsearch-keystore add xpack.security.http.ssl.keystore.secure_password
+    - name: "http Truststore secure"
+      shell: printf {{ ca_pass }} | ES_PATH_CONF={{ elasticsearch_base }}/config/{{ es_cluster_name }}/ {{ elasticsearch_bin }}/elasticsearch-keystore add xpack.security.http.ssl.truststore.secure_password
+  tags: register_cert_pass
+
+# SYSTEMD --- o objetivo é ter system.d pesssoal do user (consultar redhat docs)
+# Add SYSTEMd Configurations
+
+- name: "Create systemd Directories"
+  file:
+    path: "/home/elasticsearch/.config/systemd/user"
+    state: directory
+    owner: elasticsearch
+    group: elasticsearch
+    mode: 0770
+    recurse: yes
+
+- name: "Copy SystemD config File"
+  template:
+    src: "systemd.tpl"
+    dest: "/home/elasticsearch/.config/systemd/user/es_{{ es_cluster_name }}.service"
+
+- name: "SystemD Daemon Reload"
+  systemd:
+    scope: user
+    daemon_reload: yes
+  tags: daemonreload
+
+- name: "SystemD Start Service - es_{{ es_cluster_name }}"
+  systemd:
+    scope: user
+    name: es_{{ es_cluster_name }}
+    enabled: yes
+    state: started
+  tags: startup
+
+
+
+#########################################################################################################
+## Adicionar TASK Start node: once
+#########################################################################################################
+
+# Setup Passwords
+- name: "setup passwords cluster-first-start"
+  tags: setuppasswords
+  run_once: true
+  block:
+    - name: "Setup passwords, cluster first start"
+      shell: "ES_PATH_CONF={{ elasticsearch_base }}/config/{{ es_cluster_name }} {{ elasticsearch_bin }}/elasticsearch-setup-passwords auto -b > /tmp/passwdset.txt"
+      tags: genpassword
+    - name: "copy passwordset to ansible host"
+      tags: fetchfiles
+      fetch:
+        src: "/tmp/passwdset.txt"
+        dest: "~/secure/pw_{{ es_cluster_name }}_{{ ansible_hostname }}.txt"
+        flat: yes
+        register: copy_result
+    - name: "Remove file (delete file)"
+      ansible.builtin.file:
+        path: "/tmp/passwdset.txt"
+        state: absent

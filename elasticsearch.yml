@@ -3,4 +3,9 @@
   become_user: elasticsearch  
   roles:
     - elasticsearch
-
+  vars:
+    - es_cluster_name: "ElasticSearchCorp"
+    - es_seed_hosts: '"192.168.0.31","192.168.0.32","192.168.0.33"'
+    - es_master_nodes: '"elk1","elk2","elk3"'
+    - ca_pass: "cryptM3"
+    - cert_pass: "crypt00"

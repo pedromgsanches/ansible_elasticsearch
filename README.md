@@ -8,5 +8,5 @@
 	- executar o playbook elasticsearch.yml com --tags de setup-passwords
 	- iniciar os serviços nos nós que possam estar ainda em baixo
 
-##### 5 - testar acessos, as passwords foram geradas automaticamente em setup-passwords e estão em ~/secure/es_<ClusterName>_<ServerName>.txt
+##### 5 - testar acessos, as passwords foram geradas automaticamente em setup-passwords e estão em ~/secure/es_|ClusterName|_|ServerName|.txt
 
